@@ -3,7 +3,8 @@
 
 /* ================= WIFI ================= */
 const char* ssid = "ESP32_LineRobot";
-const char* password = "12345678";
+const char* password = "12345678";      // minimum 8 characters
+const int wifiChannel = 1;              // try 6 or 11 if channel 1 is crowded
 
 WebServer server(80);
 
@@ -63,6 +64,12 @@ bool forwardCmd = false;
 bool backCmd = false;
 bool leftCmd = false;
 bool rightCmd = false;
+
+/* ================= WIFI FAILSAFE ================= */
+// In manual mode the web page re-sends the held button every 150 ms.
+// If nothing arrives for CMD_TIMEOUT ms (WiFi lag / drop), the robot stops.
+unsigned long lastCmdTime = 0;
+const unsigned long CMD_TIMEOUT = 400;
 
 /* ================= SERVO DATA ================= */
 int servoAngle = 90;
@@ -143,6 +150,12 @@ void clearCommands() {
 }
 
 void handleManual() {
+
+  // FAILSAFE: no command received recently -> drop all commands
+  if (millis() - lastCmdTime > CMD_TIMEOUT) {
+    clearCommands();
+  }
+
   if (forwardCmd) {
     motorControl(baseSpeed, baseSpeed);
   } else if (backCmd) {
@@ -369,51 +382,79 @@ Lower the faster motor in small steps (3-5%) and run the 2 sec test.</p>
 </div>
 
 <script>
+/* every request ignores network errors so a WiFi drop does not break the page */
+function send(url){
+  return fetch(url).catch(function(){});
+}
+
 function setLineMode(){
-  fetch('/line');
+  send('/line');
   document.getElementById('lineBtn').classList.add('active');
   document.getElementById('manualBtn').classList.remove('active');
   document.getElementById('statusText').innerText='Line Follow Mode';
   document.getElementById('statusDot').classList.remove('running');
 }
 function setManualMode(){
-  fetch('/manual');
+  send('/manual');
   document.getElementById('manualBtn').classList.add('active');
   document.getElementById('lineBtn').classList.remove('active');
   document.getElementById('statusText').innerText='Manual Mode';
   document.getElementById('statusDot').classList.remove('running');
 }
+
+/* ----- manual drive with heartbeat -----
+   While a button is held, the command is re-sent every 150 ms.
+   The robot stops by itself if it stops receiving them (failsafe). */
+var timers={};
 function cmd(d,s,id){
-  fetch('/cmd?dir='+d+'&state='+s);
   var b=document.getElementById(id);
-  if(s==1)b.classList.add('pressed');else b.classList.remove('pressed');
+  if(s==1){
+    if(timers[id]) return;                 // already held
+    send('/cmd?dir='+d+'&state=1');
+    b.classList.add('pressed');
+    timers[id]=setInterval(function(){
+      send('/cmd?dir='+d+'&state=1');
+    },150);
+  } else {
+    if(timers[id]){clearInterval(timers[id]);timers[id]=null;}
+    send('/cmd?dir='+d+'&state=0');
+    b.classList.remove('pressed');
+  }
 }
 function stopManual(){
-  fetch('/cmd?dir=s&state=0');
+  for(var k in timers){
+    if(timers[k]){clearInterval(timers[k]);timers[k]=null;}
+  }
+  send('/cmd?dir=s&state=0');
   document.querySelectorAll('.control').forEach(function(b){b.classList.remove('pressed');});
 }
+/* leaving the page / locking the phone releases every button */
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden) stopManual();
+});
+
 function startRobot(){
-  fetch('/start');
+  send('/start');
   document.getElementById('lineBtn').classList.add('active');
   document.getElementById('manualBtn').classList.remove('active');
   document.getElementById('statusText').innerText='Line Robot Running';
   document.getElementById('statusDot').classList.add('running');
 }
 function stopRobot(){
-  fetch('/stop');
+  send('/stop');
   document.getElementById('statusText').innerText='Robot Stopped';
   document.getElementById('statusDot').classList.remove('running');
 }
 function changeSpeed(v){
   document.getElementById('speedValue').innerHTML=v;
-  fetch('/speed?value='+v);
+  send('/speed?value='+v);
 }
 function setKp(){
-  fetch('/kp?value='+document.getElementById('kp').value);
+  send('/kp?value='+document.getElementById('kp').value);
 }
 function changeServo(v){
   document.getElementById('servoValue').innerHTML=v;
-  fetch('/servo?angle='+v);
+  send('/servo?angle='+v);
 }
 function setServo(v){
   document.getElementById('servo').value=v;
@@ -425,10 +466,10 @@ function setTrim(){
   var r=document.getElementById('rightTrim').value;
   var lm=document.getElementById('leftMin').value;
   var rm=document.getElementById('rightMin').value;
-  fetch('/trim?left='+l+'&right='+r+'&lmin='+lm+'&rmin='+rm);
+  send('/trim?left='+l+'&right='+r+'&lmin='+lm+'&rmin='+rm);
 }
 function singleTest(side){
-  fetch('/singletest?side='+side);
+  send('/singletest?side='+side);
 }
 function resetTrim(){
   document.getElementById('leftTrim').value=100;
@@ -438,7 +479,7 @@ function resetTrim(){
   setTrim();
 }
 function fwdTest(){
-  fetch('/fwdtest');
+  send('/fwdtest');
 }
 
 /* ----- load the robot's current settings when the page opens ----- */
@@ -455,7 +496,7 @@ window.onload=function(){
     document.getElementById('speed').value=t.speed;
     document.getElementById('speedValue').innerHTML=t.speed;
     document.getElementById('kp').value=t.kp;
-  });
+  }).catch(function(){});
 };
 </script>
 </body>
@@ -499,14 +540,19 @@ void setup() {
   leftMin   = constrain(leftMin,   0, 150);
   rightMin  = constrain(rightMin,  0, 150);
 
-  /* ---------- WIFI ---------- */
-  WiFi.softAP(ssid, password);
+  /* ---------- WIFI (improved link) ---------- */
+  WiFi.mode(WIFI_AP);                           // access point only
+  WiFi.softAP(ssid, password, wifiChannel, 0, 1); // channel, visible, max 1 client
+  WiFi.setSleep(false);                         // no radio power-saving lag
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);          // max signal strength
+  delay(100);
 
   Serial.println();
   Serial.println("=================================");
   Serial.println("ESP32 Line Robot + SG90 Servo");
   Serial.println("WiFi AP Started");
-  Serial.println("IP: 192.168.4.1");
+  Serial.print("IP: ");
+  Serial.println(WiFi.softAPIP());
   Serial.print("leftTrim = ");  Serial.print(leftTrim);
   Serial.print("  rightTrim = "); Serial.println(rightTrim);
   Serial.print("leftMin = ");  Serial.print(leftMin);
@@ -543,6 +589,7 @@ void setup() {
     testRunning = false;
     clearCommands();
     stopMotors();
+    lastCmdTime = millis();
     server.send(200, "text/plain", "Manual Mode");
   });
 
@@ -566,6 +613,8 @@ void setup() {
       server.send(200, "text/plain", "Manual Mode Required");
       return;
     }
+
+    lastCmdTime = millis();     // heartbeat for the failsafe
 
     if (d == "f")      forwardCmd = state;
     else if (d == "b") backCmd = state;
@@ -678,13 +727,13 @@ void loop() {
     return;
   }
 
-  /* ---------- MANUAL MODE ---------- */
+  /* ---------- MANUAL MODE (with WiFi failsafe) ---------- */
   if (manualMode) {
     handleManual();
     return;
   }
 
-  /* ---------- LINE FOLLOW MODE ---------- */
+  /* ---------- LINE FOLLOW MODE (runs fully on the ESP32, no WiFi needed) ---------- */
   if (runRobot) {
 
     int left = digitalRead(LEFT_SENSOR);
