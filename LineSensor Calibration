@@ -1,0 +1,16 @@
+const int LEFT_IR = 34;
+const int RIGHT_IR = 35;
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LEFT_IR, INPUT);
+  pinMode(RIGHT_IR, INPUT);
+}
+
+void loop() {
+  Serial.print("Left: ");
+  Serial.print(digitalRead(LEFT_IR));
+  Serial.print("  Right: ");
+  Serial.println(digitalRead(RIGHT_IR));
+  delay(200);
+}
