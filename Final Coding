@@ -46,14 +46,14 @@ int baseSpeed = 150;
 //   Robot curves LEFT  -> right motor is faster -> lower rightTrim
 // Tune from the web page, then copy the final numbers from the
 // Serial Monitor into these two lines.
-float leftTrim  = 75;    // percent of the range ABOVE the minimum PWM
-float rightTrim = 100;
+float leftTrim  = 70;    // percent of the range ABOVE the minimum PWM
+float rightTrim = 70;
 
 // Minimum PWM at which each motor just starts to turn (deadband).
 // Find them with the "TEST LEFT ONLY / RIGHT ONLY" buttons on the web page:
 // lower the Motor Speed slider until that wheel barely moves, use that value.
-int leftMin  = 60;
-int rightMin = 60;
+int leftMin  = 75;
+int rightMin = 75;
 
 /* ================= MODE ================= */
 bool runRobot = false;
